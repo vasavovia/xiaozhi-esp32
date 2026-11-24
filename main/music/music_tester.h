@@ -29,6 +29,7 @@ private:
     std::mutex mutex_;
     TaskHandle_t task_handle_ = nullptr;
     bool stop_requested_ = false;
+    bool playlist_mode_ = false;
     std::string url_;
     std::string playlist_;
 };

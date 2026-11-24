@@ -61,6 +61,7 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
     }
     url_ = url;
     playlist_.clear();
+    playlist_mode_ = false;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 10240, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -79,6 +80,7 @@ bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error)
     }
     playlist_ = playlist;
     url_.clear();
+    playlist_mode_ = true;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 12288, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -103,8 +105,8 @@ std::string MusicTester::Status() {
     if (task_handle_ == nullptr) {
         return "idle";
     }
-    if (!playlist_.empty()) {
-        return "playing playlist " + playlist_;
+    if (playlist_mode_) {
+        return "playing playlist '" + playlist_ + "'";
     }
     return "playing " + url_;
 }
@@ -117,13 +119,15 @@ void MusicTester::WorkerEntry(void* arg) {
 void MusicTester::WorkerTask() {
     std::string url;
     std::string playlist;
+    bool playlist_mode = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         url = url_;
         playlist = playlist_;
+        playlist_mode = playlist_mode_;
     }
 
-    if (!playlist.empty()) {
+    if (playlist_mode) {
         YandexMusic client;
         std::vector<YmTrack> tracks;
         std::string error;
@@ -366,6 +370,12 @@ esp_err_t TokenHandler(httpd_req_t* req) {
     char query[512] = {};
     char value[384] = {};
     size_t query_len = httpd_req_get_url_query_len(req) + 1;
+    if (!YandexMusic::GetToken().empty()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "token already stored");
+        return ESP_OK;
+    }
     if (query_len > 1 && query_len <= sizeof(query) &&
         httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
         httpd_query_key_value(query, "token", value, sizeof(value)) == ESP_OK && value[0] != 0) {
@@ -373,11 +383,45 @@ esp_err_t TokenHandler(httpd_req_t* req) {
         ESP_LOGI(TAG, "Yandex token provisioned over LAN (%u chars)",
                  static_cast<unsigned>(std::strlen(value)));
         httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "ok: token stored, reboot the device");
+        httpd_resp_sendstr(req, "ok: token stored");
         return ESP_OK;
     }
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "usage: /ym?token=YOUR_YANDEX_MUSIC_TOKEN");
+    return ESP_OK;
+}
+
+esp_err_t PlayHandler(httpd_req_t* req) {
+    char query[768] = {};
+    char value[512] = {};
+    std::string error;
+    bool started = false;
+
+    if (httpd_req_get_url_query_len(req) + 1 <= sizeof(query) &&
+        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (httpd_query_key_value(query, "likes", value, sizeof(value)) == ESP_OK) {
+            started = MusicTester::GetInstance().StartPlaylist("", error);
+        } else if (httpd_query_key_value(query, "list", value, sizeof(value)) == ESP_OK) {
+            started = MusicTester::GetInstance().StartPlaylist(value, error);
+        } else if (httpd_query_key_value(query, "url", value, sizeof(value)) == ESP_OK) {
+            started = MusicTester::GetInstance().StartUrl(value, error);
+        }
+    }
+
+    httpd_resp_set_type(req, "text/plain");
+    if (started) {
+        httpd_resp_sendstr(req, "ok: playing");
+    } else if (!error.empty()) {
+        httpd_resp_sendstr(req, ("error: " + error).c_str());
+    } else {
+        httpd_resp_sendstr(req, "usage: /play?list=NAME | /play?likes=1 | /play?url=URL");
+    }
+    return ESP_OK;
+}
+
+esp_err_t StatusHandler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, MusicTester::GetInstance().Status().c_str());
     return ESP_OK;
 }
 
@@ -400,7 +444,20 @@ void StartTokenHttpd() {
     uri.method = HTTP_GET;
     uri.handler = TokenHandler;
     httpd_register_uri_handler(g_token_server, &uri);
-    ESP_LOGI(TAG, "No Yandex token yet: provision it at http://<device-ip>:8080/ym?token=...");
+
+    httpd_uri_t play = {};
+    play.uri = "/play";
+    play.method = HTTP_GET;
+    play.handler = PlayHandler;
+    httpd_register_uri_handler(g_token_server, &play);
+
+    httpd_uri_t status = {};
+    status.uri = "/status";
+    status.method = HTTP_GET;
+    status.handler = StatusHandler;
+    httpd_register_uri_handler(g_token_server, &status);
+
+    ESP_LOGI(TAG, "Music HTTP control on port 8080: /play?list=NAME, /play?likes=1, /play?url=URL, /status");
 }
 
 // lwIP must be up before httpd_start(), so wait for the station to get an address.
@@ -423,11 +480,11 @@ void TokenServerTask(void*) {
 }  // namespace
 
 void StartTokenProvisioning() {
-    if (!YandexMusic::GetToken().empty()) {
-        return;
+    if (YandexMusic::GetToken().empty()) {
+        ESP_LOGI(TAG, "No Yandex token yet, /ym will accept one");
     }
     if (xTaskCreate(TokenServerTask, "ym_token", 4096, nullptr, 2, nullptr) != pdPASS) {
-        ESP_LOGW(TAG, "Token provisioning task could not be created");
+        ESP_LOGW(TAG, "Music HTTP task could not be created");
     }
 }
 
