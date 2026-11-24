@@ -1,6 +1,7 @@
 #include "music_tester.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -40,10 +41,20 @@ int16_t ToMono(const int16_t* frame, int channels) {    if (channels <= 1) {
     return frame[0];
 }
 
-// Music plays only while the assistant is idle: waking it or a spoken reply stops playback,
-// so two audio streams never share the decode queue.
+// Music plays only while the assistant is not talking or listening: those states share the
+// decode queue with TTS. Booting states (starting, activating, wifi configuring) are fine.
 bool AssistantBusy() {
-    return Application::GetInstance().GetDeviceState() != kDeviceStateIdle;
+    switch (Application::GetInstance().GetDeviceState()) {
+        case kDeviceStateConnecting:
+        case kDeviceStateListening:
+        case kDeviceStateSpeaking:
+        case kDeviceStateNotifying:
+        case kDeviceStateUpgrading:
+        case kDeviceStateAudioTesting:
+            return true;
+        default:
+            return false;
+    }
 }
 
 }  // namespace
@@ -436,6 +447,31 @@ esp_err_t StatusHandler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+esp_err_t VolumeHandler(httpd_req_t* req) {
+    char query[128] = {};
+    char value[16] = {};
+    int level = -1;
+    if (httpd_req_get_url_query_len(req) + 1 <= sizeof(query) &&
+        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "value", value, sizeof(value)) == ESP_OK) {
+        level = std::atoi(value);
+    }
+    if (level < 0) {
+        level = 0;
+    }
+    if (level > 100) {
+        level = 100;
+    }
+    auto* codec = Board::GetInstance().GetAudioCodec();
+    if (codec != nullptr) {
+        codec->SetOutputVolume(level);
+        ESP_LOGI(TAG, "Volume set to %d over LAN", level);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, ("ok: volume " + std::to_string(level)).c_str());
+    return ESP_OK;
+}
+
 }  // namespace
 
 namespace {
@@ -468,7 +504,13 @@ void StartTokenHttpd() {
     status.handler = StatusHandler;
     httpd_register_uri_handler(g_token_server, &status);
 
-    ESP_LOGI(TAG, "Music HTTP control on port 8080: /play?list=NAME, /play?likes=1, /play?url=URL, /status");
+    httpd_uri_t volume = {};
+    volume.uri = "/vol";
+    volume.method = HTTP_GET;
+    volume.handler = VolumeHandler;
+    httpd_register_uri_handler(g_token_server, &volume);
+
+    ESP_LOGI(TAG, "Music HTTP control on port 8080: /play?list=NAME, /play?likes=1, /play?url=URL, /status, /vol?value=NN");
 }
 
 // lwIP must be up before httpd_start(), so wait for the station to get an address.
