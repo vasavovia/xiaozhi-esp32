@@ -17,6 +17,7 @@
 #include "application.h"
 #include "audio/audio_service.h"
 #include "board.h"
+#include "device_state.h"
 #include "mcp_server.h"
 #include "music/yandex_music.h"
 #include "protocols/protocol.h"
@@ -29,8 +30,7 @@ constexpr int kOutputRate = ESP_AUDIO_SAMPLE_RATE_24K;
 constexpr int kFrameSamples = kOutputRate * OPUS_FRAME_DURATION_MS / 1000;
 constexpr int kHttpTimeoutMs = 20000;
 
-int16_t ToMono(const int16_t* frame, int channels) {
-    if (channels <= 1) {
+int16_t ToMono(const int16_t* frame, int channels) {    if (channels <= 1) {
         return frame[0];
     }
     if (channels == 2) {
@@ -38,6 +38,12 @@ int16_t ToMono(const int16_t* frame, int channels) {
         return static_cast<int16_t>(sum / 2);
     }
     return frame[0];
+}
+
+// Music plays only while the assistant is idle: waking it or a spoken reply stops playback,
+// so two audio streams never share the decode queue.
+bool AssistantBusy() {
+    return Application::GetInstance().GetDeviceState() != kDeviceStateIdle;
 }
 
 }  // namespace
@@ -134,7 +140,7 @@ void MusicTester::WorkerTask() {
         if (client.ResolvePlaylist(playlist, tracks, error)) {
             ESP_LOGI(TAG, "Playlist has %u tracks", static_cast<unsigned>(tracks.size()));
             for (const auto& track : tracks) {
-                if (StopRequested()) {
+                if (StopRequested() || AssistantBusy()) {
                     break;
                 }
                 std::string stream_url;
@@ -239,6 +245,10 @@ void MusicTester::StreamOne(const std::string& url) {
     while (true) {
         if (StopRequested()) {
             ESP_LOGI(TAG, "Stop requested");
+            break;
+        }
+        if (AssistantBusy()) {
+            ESP_LOGI(TAG, "Assistant is active, stopping music");
             break;
         }
 
