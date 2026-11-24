@@ -19,14 +19,56 @@ jobs:
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"
+          set -o pipefail
           python scripts/build.py freenove-esp32s3-display-2.8-lcd \
             --name freenove-esp32s3-display-2.8-lcd \
             --language ru-RU \
-            --wake-word wn9_computer_tts
+            --wake-word wn9_computer_tts 2>&1 | tee build.log
 
       - name: Upload merged binary
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: merged-binary-ru-${{ github.sha }}
+          name: merged-binary-ru
           path: build/merged-binary.bin
           if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: out
+
+      - name: Publish log and binary to a rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -x
+          ls -R out || true
+          TAG=ci-latest
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --title "CI builds" \
+              --notes "Rolling build of the ES3N28P firmware" || true
+          fi
+          if [ -f out/build-log/build.log ]; then
+            cp out/build-log/build.log "build-${GITHUB_RUN_NUMBER}.log"
+            gh release upload "$TAG" --repo "$REPO" --clobber "build-${GITHUB_RUN_NUMBER}.log"
+            gh release upload "$TAG" --repo "$REPO" --clobber "build-${GITHUB_RUN_NUMBER}.log#build.log"
+          fi
+          if [ -f out/merged-binary-ru/merged-binary.bin ]; then
+            gh release upload "$TAG" --repo "$REPO" --clobber out/merged-binary-ru/merged-binary.bin
+          fi
