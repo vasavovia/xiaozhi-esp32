@@ -22,6 +22,7 @@
 #include "led/single_led.h"
 #include "system_reset.h"
 #include "esp_lcd_ili9341.h"
+#include "music/music_tester.h"
 
 #define TAG "FreenoveESP32S3Display"
 
@@ -197,6 +198,7 @@ private:
     }
 
     void InitializeTools() {
+        InitializeMusicTester();
     }
 
 public:
