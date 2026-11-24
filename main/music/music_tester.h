@@ -35,4 +35,8 @@ private:
 
 void InitializeMusicTester();
 
+// Serves /ym?token=... on port 8080 while no token is stored, so the Yandex
+// token can be provisioned from another machine on the same LAN.
+void StartTokenProvisioning();
+
 #endif  // MUSIC_TESTER_H

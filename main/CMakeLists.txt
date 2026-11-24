@@ -1223,6 +1223,7 @@ idf_component_register(SRCS ${SOURCES}
                         app_update
                         spi_flash
                         mbedtls
+                        esp_http_server
                         console
                         efuse
                         bt

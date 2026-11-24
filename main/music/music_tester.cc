@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+#include <esp_http_server.h>
 #include <esp_log.h>
 #include "esp_audio_dec.h"
 #include "esp_audio_dec_default.h"
@@ -356,8 +357,56 @@ void MusicTester::StreamOne(const std::string& url) {
     http->Close();
 }
 
+namespace {
+
+httpd_handle_t g_token_server = nullptr;
+
+esp_err_t TokenHandler(httpd_req_t* req) {
+    char query[512] = {};
+    char value[384] = {};
+    size_t query_len = httpd_req_get_url_query_len(req) + 1;
+    if (query_len > 1 && query_len <= sizeof(query) &&
+        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "token", value, sizeof(value)) == ESP_OK && value[0] != 0) {
+        YandexMusic::SetToken(value);
+        ESP_LOGI(TAG, "Yandex token provisioned over LAN (%u chars)",
+                 static_cast<unsigned>(std::strlen(value)));
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, "ok: token stored, reboot the device");
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "usage: /ym?token=YOUR_YANDEX_MUSIC_TOKEN");
+    return ESP_OK;
+}
+
+}  // namespace
+
+void StartTokenProvisioning() {
+    if (!YandexMusic::GetToken().empty()) {
+        return;
+    }
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 8080;
+    config.ctrl_port = 32769;
+    config.lru_purge_enable = true;
+    if (httpd_start(&g_token_server, &config) != ESP_OK) {
+        ESP_LOGW(TAG, "Token provisioning server failed to start");
+        g_token_server = nullptr;
+        return;
+    }
+    httpd_uri_t uri = {};
+    uri.uri = "/ym";
+    uri.method = HTTP_GET;
+    uri.handler = TokenHandler;
+    httpd_register_uri_handler(g_token_server, &uri);
+    ESP_LOGI(TAG, "No Yandex token yet: provision it at http://<device-ip>:8080/ym?token=...");
+}
+
 void InitializeMusicTester() {
     esp_audio_dec_register_default();
+
+    StartTokenProvisioning();
 
     auto& server = McpServer::GetInstance();
 
