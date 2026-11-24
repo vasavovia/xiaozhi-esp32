@@ -63,7 +63,7 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
     playlist_.clear();
     playlist_mode_ = false;
     stop_requested_ = false;
-    if (xTaskCreate(WorkerEntry, "music_player", 10240, this, 3, &task_handle_) != pdPASS) {
+    if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
         error = "task create failed";
         return false;
@@ -82,7 +82,7 @@ bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error)
     url_.clear();
     playlist_mode_ = true;
     stop_requested_ = false;
-    if (xTaskCreate(WorkerEntry, "music_player", 12288, this, 3, &task_handle_) != pdPASS) {
+    if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
         error = "task create failed";
         return false;
@@ -218,7 +218,8 @@ void MusicTester::StreamOne(const std::string& url) {
     int enc_frame_size = 0;
     int enc_out_size = 0;
     esp_opus_enc_get_frame_size(encoder, &enc_frame_size, &enc_out_size);
-    ESP_LOGI(TAG, "Opus frame %d samples, out buffer %d bytes", enc_frame_size, enc_out_size);
+    ESP_LOGI(TAG, "Opus frame %d bytes (%d samples), out buffer %d bytes", enc_frame_size,
+             enc_frame_size / static_cast<int>(sizeof(int16_t)), enc_out_size);
 
     std::vector<uint8_t> opus_buf(enc_out_size > 0 ? enc_out_size : 1024);
     std::vector<int16_t> mono_frame(kFrameSamples);
