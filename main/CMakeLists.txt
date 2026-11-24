@@ -41,6 +41,7 @@ set(SOURCES "audio/audio_codec.cc"
             "device_state_machine.cc"
             "assets.cc"
             "music/music_tester.cc"
+            "music/yandex_music.cc"
             "main.cc"
             )
 

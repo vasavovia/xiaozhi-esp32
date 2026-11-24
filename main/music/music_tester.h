@@ -7,13 +7,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-// Minimal internet-radio playback path: HTTP(S) -> MP3 -> PCM -> Opus -> AudioService.
-// MCP tools let the assistant start and stop a stream by voice.
+// Playback path: HTTP(S) -> MP3 -> PCM -> Opus -> AudioService.
+// Two entry points: a direct audio URL, or a Yandex Music playlist by name.
 class MusicTester {
 public:
     static MusicTester& GetInstance();
 
-    bool Start(const std::string& url, std::string& error);
+    bool StartUrl(const std::string& url, std::string& error);
+    bool StartPlaylist(const std::string& playlist, std::string& error);
     void Stop();
     bool IsPlaying();
     std::string Status();
@@ -22,11 +23,14 @@ private:
     MusicTester() = default;
     static void WorkerEntry(void* arg);
     void WorkerTask();
+    void StreamOne(const std::string& url);
+    bool StopRequested();
 
     std::mutex mutex_;
     TaskHandle_t task_handle_ = nullptr;
     bool stop_requested_ = false;
     std::string url_;
+    std::string playlist_;
 };
 
 void InitializeMusicTester();
