@@ -1,0 +1,32 @@
+name: Build RU firmware (ES3N28P)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/**
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build freenove-esp32s3-display-2.8-lcd (ru-RU)
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py freenove-esp32s3-display-2.8-lcd \
+            --name freenove-esp32s3-display-2.8-lcd \
+            --language ru-RU \
+            --wake-word wn9_computer_tts
+
+      - name: Upload merged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-binary-ru-${{ github.sha }}
+          path: build/merged-binary.bin
+          if-no-files-found: error
