@@ -65,9 +65,7 @@ jobs:
               --notes "Rolling build of the ES3N28P firmware" || true
           fi
           if [ -f out/build-log/build.log ]; then
-            cp out/build-log/build.log "build-${GITHUB_RUN_NUMBER}.log"
-            gh release upload "$TAG" --repo "$REPO" --clobber "build-${GITHUB_RUN_NUMBER}.log"
-            gh release upload "$TAG" --repo "$REPO" --clobber "build-${GITHUB_RUN_NUMBER}.log#build.log"
+            gh release upload "$TAG" --repo "$REPO" --clobber out/build-log/build.log
           fi
           if [ -f out/merged-binary-ru/merged-binary.bin ]; then
             gh release upload "$TAG" --repo "$REPO" --clobber out/merged-binary-ru/merged-binary.bin

@@ -215,7 +215,7 @@ void MusicTester::StreamOne(const std::string& url) {
     ESP_LOGI(TAG, "Opus frame %d samples, out buffer %d bytes", enc_frame_size, enc_out_size);
 
     std::vector<uint8_t> opus_buf(enc_out_size > 0 ? enc_out_size : 1024);
-    int16_t mono_frame[kFrameSamples];
+    std::vector<int16_t> mono_frame(kFrameSamples);
     int mono_fill = 0;
     double resample_pos = 0.0;
     int last_src_rate = 0;
@@ -316,7 +316,7 @@ void MusicTester::StreamOne(const std::string& url) {
                 mono_frame[mono_fill++] = value;
                 if (mono_fill == kFrameSamples) {
                     esp_audio_enc_in_frame_t in = {};
-                    in.buffer = reinterpret_cast<uint8_t*>(mono_frame);
+                    in.buffer = reinterpret_cast<uint8_t*>(mono_frame.data());
                     in.len = kFrameSamples * sizeof(int16_t);
                     esp_audio_enc_out_frame_t enc_out = {};
                     enc_out.buffer = opus_buf.data();

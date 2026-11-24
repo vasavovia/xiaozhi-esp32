@@ -117,7 +117,8 @@ std::string Md5Hex(const std::string& input) {
     char hex[33];
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
-            std::snprintf(hex + (i * 8) + (j * 2), 3, "%02x", (state[i] >> (8 * j)) & 0xff);
+            std::snprintf(hex + (i * 8) + (j * 2), 3, "%02x",
+                          static_cast<unsigned>((state[i] >> (8 * j)) & 0xffu));
         }
     }
     return std::string(hex, 32);
