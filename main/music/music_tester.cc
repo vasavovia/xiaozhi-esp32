@@ -144,6 +144,19 @@ void MusicTester::WorkerTask() {
         playlist_mode = playlist_mode_;
     }
 
+    // A voice request arrives while the assistant is still saying "playing": wait for it to
+    // fall silent instead of aborting the request.
+    for (int attempt = 0; attempt < 150 && !StopRequested() && AssistantBusy(); attempt++) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    if (StopRequested()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        task_handle_ = nullptr;
+        stop_requested_ = false;
+        ESP_LOGI(TAG, "Playback cancelled before start");
+        return;
+    }
+
     if (playlist_mode) {
         YandexMusic client;
         std::vector<YmTrack> tracks;
