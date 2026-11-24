@@ -7,6 +7,7 @@
 
 #include <esp_http_server.h>
 #include <esp_log.h>
+#include <esp_netif.h>
 #include "esp_audio_dec.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_enc.h"
@@ -382,10 +383,9 @@ esp_err_t TokenHandler(httpd_req_t* req) {
 
 }  // namespace
 
-void StartTokenProvisioning() {
-    if (!YandexMusic::GetToken().empty()) {
-        return;
-    }
+namespace {
+
+void StartTokenHttpd() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 8080;
     config.ctrl_port = 32769;
@@ -401,6 +401,34 @@ void StartTokenProvisioning() {
     uri.handler = TokenHandler;
     httpd_register_uri_handler(g_token_server, &uri);
     ESP_LOGI(TAG, "No Yandex token yet: provision it at http://<device-ip>:8080/ym?token=...");
+}
+
+// lwIP must be up before httpd_start(), so wait for the station to get an address.
+void TokenServerTask(void*) {
+    for (int attempt = 0; attempt < 90; attempt++) {
+        esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_ip_info_t info = {};
+        if (netif != nullptr && esp_netif_get_ip_info(netif, &info) == ESP_OK &&
+            info.ip.addr != 0) {
+            StartTokenHttpd();
+            vTaskDelete(nullptr);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    ESP_LOGW(TAG, "No station IP within 180 s, token provisioning server not started");
+    vTaskDelete(nullptr);
+}
+
+}  // namespace
+
+void StartTokenProvisioning() {
+    if (!YandexMusic::GetToken().empty()) {
+        return;
+    }
+    if (xTaskCreate(TokenServerTask, "ym_token", 4096, nullptr, 2, nullptr) != pdPASS) {
+        ESP_LOGW(TAG, "Token provisioning task could not be created");
+    }
 }
 
 void InitializeMusicTester() {
