@@ -662,11 +662,13 @@ void UpdateClock() {
     if (now == g_ui.last_clock) {
         return;
     }
-    bool first = g_ui.last_clock == "--:--" && now != "--:--";
+    bool first = g_ui.last_clock.size() != 5 || g_ui.last_clock == "--:--";
     g_ui.last_clock = now;
     lv_label_set_text(g_ui.clock_text, now.c_str());
     if (first) {
-        ESP_LOGI(TAG, "clock synced: %s", now.c_str());
+        // OTA also sets the clock at boot, shifted by the offset its server reports, so print the
+        // raw epoch next to the rendered time to tell a real sync from that shifted value.
+        ESP_LOGI(TAG, "clock: epoch=%ld local=%s", static_cast<long>(time(nullptr)), now.c_str());
     }
 }
 
