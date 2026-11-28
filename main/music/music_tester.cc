@@ -79,6 +79,7 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
     url_ = url;
     playlist_.clear();
     playlist_mode_ = false;
+    wave_mode_ = false;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -98,6 +99,27 @@ bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error)
     playlist_ = playlist;
     url_.clear();
     playlist_mode_ = true;
+    wave_mode_ = false;
+    stop_requested_ = false;
+    if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
+        task_handle_ = nullptr;
+        error = "task create failed";
+        return false;
+    }
+    return true;
+}
+
+bool MusicTester::StartWave(std::string& error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (task_handle_ != nullptr) {
+        stop_requested_ = true;
+        error = "already playing, stop requested";
+        return false;
+    }
+    playlist_.clear();
+    url_.clear();
+    playlist_mode_ = false;
+    wave_mode_ = true;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -122,6 +144,9 @@ std::string MusicTester::Status() {
     if (task_handle_ == nullptr) {
         return "idle";
     }
+    if (wave_mode_) {
+        return "playing my wave";
+    }
     if (playlist_mode_) {
         return "playing playlist '" + playlist_ + "'";
     }
@@ -137,11 +162,13 @@ void MusicTester::WorkerTask() {
     std::string url;
     std::string playlist;
     bool playlist_mode = false;
+    bool wave_mode = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         url = url_;
         playlist = playlist_;
         playlist_mode = playlist_mode_;
+        wave_mode = wave_mode_;
     }
 
     // A voice request arrives while the assistant is still saying "playing": wait for it to
@@ -157,7 +184,10 @@ void MusicTester::WorkerTask() {
         return;
     }
 
-    if (playlist_mode) {
+    if (wave_mode) {
+        YandexMusic client;
+        PlayWave(client);
+    } else if (playlist_mode) {
         YandexMusic client;
         std::vector<YmTrack> tracks;
         std::string error;
@@ -188,6 +218,39 @@ void MusicTester::WorkerTask() {
         stop_requested_ = false;
     }
     ESP_LOGI(TAG, "Playback finished");
+}
+
+// «Моя волна»: keeps asking the rotor for the next batch (passing the previous batchId so the
+// tracks do not repeat) and reports trackStarted/trackFinished so the station adapts.
+void MusicTester::PlayWave(YandexMusic& client) {
+    std::string error;
+    while (!StopRequested() && !AssistantBusy()) {
+        std::vector<YmTrack> batch;
+        if (!client.FetchWaveBatch(batch, error)) {
+            ESP_LOGE(TAG, "Wave batch failed: %s", error.c_str());
+            return;
+        }
+
+        bool interrupted = false;
+        for (const auto& track : batch) {
+            if (StopRequested() || AssistantBusy()) {
+                interrupted = true;
+                break;
+            }
+            std::string stream_url;
+            if (!client.ResolveTrackUrl(track.id, stream_url, error)) {
+                ESP_LOGW(TAG, "Skip %s: %s", track.title.c_str(), error.c_str());
+                continue;
+            }
+            ESP_LOGI(TAG, "Wave track: %s", track.title.c_str());
+            client.SendWaveFeedback("trackStarted", track.id);
+            StreamOne(stream_url);
+            client.SendWaveFeedback("trackFinished", track.id);
+        }
+        if (interrupted) {
+            return;
+        }
+    }
 }
 
 void MusicTester::StreamOne(const std::string& url) {
@@ -434,7 +497,9 @@ esp_err_t PlayHandler(httpd_req_t* req) {
 
     if (httpd_req_get_url_query_len(req) + 1 <= sizeof(query) &&
         httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        if (httpd_query_key_value(query, "likes", value, sizeof(value)) == ESP_OK) {
+        if (httpd_query_key_value(query, "wave", value, sizeof(value)) == ESP_OK) {
+            started = MusicTester::GetInstance().StartWave(error);
+        } else if (httpd_query_key_value(query, "likes", value, sizeof(value)) == ESP_OK) {
             started = MusicTester::GetInstance().StartPlaylist("", error);
         } else if (httpd_query_key_value(query, "list", value, sizeof(value)) == ESP_OK) {
             started = MusicTester::GetInstance().StartPlaylist(value, error);
@@ -449,7 +514,7 @@ esp_err_t PlayHandler(httpd_req_t* req) {
     } else if (!error.empty()) {
         httpd_resp_sendstr(req, ("error: " + error).c_str());
     } else {
-        httpd_resp_sendstr(req, "usage: /play?list=NAME | /play?likes=1 | /play?url=URL");
+        httpd_resp_sendstr(req, "usage: /play?list=NAME | /play?likes=1 | /play?wave=1 | /play?url=URL");
     }
     return ESP_OK;
 }
@@ -560,6 +625,19 @@ void InitializeMusicTester() {
     StartTokenProvisioning();
 
     auto& server = McpServer::GetInstance();
+
+    server.AddTool(
+        "self.music.play_wave",
+        "Play the user's personal Yandex Music radio station («Моя волна»): endless, "
+        "personalised, adapts from likes and skips. Use it when the user asks for the wave, "
+        "the radio, or 'включи мою волну'. Stops any previous playback.",
+        PropertyList(), [](const PropertyList&) -> ToolResult {
+            std::string error;
+            if (!MusicTester::GetInstance().StartWave(error)) {
+                return std::unexpected(error);
+            }
+            return std::string("playing");
+        });
 
     server.AddTool(
         "self.music.play_playlist",

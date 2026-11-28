@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <strings.h>
 #include <vector>
 
@@ -226,6 +227,140 @@ bool YandexMusic::Get(const std::string& url, std::string& body, std::string& er
     }
     http->Close();
     return true;
+}
+
+bool YandexMusic::PostJson(const std::string& url, const std::string& body,
+                           std::string& response, std::string& error) {
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+    if (!http) {
+        error = "no http client";
+        return false;
+    }
+    http->SetTimeout(20000);
+    http->SetHeader("Authorization", "OAuth " + GetToken());
+    http->SetHeader("Accept", "application/json");
+    http->SetHeader("Content-Type", "application/json");
+    http->SetHeader("Accept-Encoding", "identity");
+
+    auto opened = http->Open("POST", url);
+    if (!opened) {
+        error = "open failed: " + opened.error().ToString();
+        http->Close();
+        return false;
+    }
+    if (auto written = http->Write(body.c_str(), body.size()); !written) {
+        error = "write failed: " + written.error().ToString();
+        http->Close();
+        return false;
+    }
+    auto status = http->GetStatusCode();
+    if (!status) {
+        error = "status failed: " + status.error().ToString();
+        http->Close();
+        return false;
+    }
+    bool ok = *status >= 200 && *status < 300;
+    if (!ok) {
+        error = "http " + std::to_string(*status);
+    }
+
+    char buffer[512];
+    response.clear();
+    while (true) {
+        auto read = http->Read(buffer, sizeof(buffer));
+        if (!read || *read == 0) {
+            break;
+        }
+        response.append(buffer, *read);
+        if (response.size() > 4096) {
+            break;
+        }
+    }
+    http->Close();
+    return ok;
+}
+
+bool YandexMusic::FetchWaveBatch(std::vector<YmTrack>& tracks, std::string& error) {
+    tracks.clear();
+    if (GetToken().empty()) {
+        error = "no yandex token provisioned";
+        return false;
+    }
+
+    std::string url = std::string(kApiBase) + "/rotor/station/user:onyourwave/tracks?settings2=true";
+    if (!wave_batch_id_.empty()) {
+        url += "&batchId=" + wave_batch_id_;
+    }
+
+    std::string body;
+    if (!Get(url, body, error)) {
+        return false;
+    }
+
+    cJSON* root = ParseJson(body);
+    if (root == nullptr) {
+        error = "rotor: bad json";
+        return false;
+    }
+    const cJSON* result = cJSON_GetObjectItem(root, "result");
+    std::string batch_id = GetStringField(result, "batchId");
+    if (!batch_id.empty()) {
+        wave_batch_id_ = batch_id;
+    }
+    const cJSON* sequence = cJSON_GetObjectItem(result, "sequence");
+    if (cJSON_IsArray(sequence)) {
+        const cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, sequence) {
+            const cJSON* track = cJSON_GetObjectItem(item, "track");
+            std::string id = GetStringField(track, "realId");
+            if (id.empty()) {
+                id = GetStringField(track, "id");
+            }
+            if (id.empty()) {
+                continue;
+            }
+            YmTrack entry;
+            entry.id = id;
+            entry.title = GetStringField(track, "title");
+            tracks.push_back(entry);
+        }
+    }
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "wave batch %u tracks, batchId=%s", static_cast<unsigned>(tracks.size()),
+             wave_batch_id_.c_str());
+    if (tracks.empty()) {
+        error = "empty wave batch";
+        return false;
+    }
+    return true;
+}
+
+void YandexMusic::SendWaveFeedback(const std::string& type, const std::string& track_id) {
+    char stamp[32] = {};
+    std::time_t now = std::time(nullptr);
+    std::tm utc = {};
+    gmtime_r(&now, &utc);
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S+00:00", &utc);
+
+    cJSON* payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(payload, "type", type.c_str());
+    cJSON_AddStringToObject(payload, "trackId", track_id.c_str());
+    cJSON_AddStringToObject(payload, "batchId", wave_batch_id_.c_str());
+    cJSON_AddStringToObject(payload, "timestamp", stamp);
+    char* printed = cJSON_PrintUnformatted(payload);
+    std::string body = printed != nullptr ? printed : "{}";
+    if (printed != nullptr) {
+        cJSON_free(printed);
+    }
+    cJSON_Delete(payload);
+
+    std::string response;
+    std::string error;
+    if (!PostJson(std::string(kApiBase) + "/rotor/station/user:onyourwave/feedback", body, response,
+                  error)) {
+        ESP_LOGW(TAG, "wave feedback %s failed: %s", type.c_str(), error.c_str());
+    }
 }
 
 bool YandexMusic::EnsureUid(std::string& error) {
