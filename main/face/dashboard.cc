@@ -321,7 +321,10 @@ void BuildWeather(lv_obj_t* root) {
     lv_obj_t* card =
         Panel(root, kRightX, kWeatherY, kRightW, kWeatherH, kCardBg, 8, kCardLine, 1);
 
-    g_ui.city_text = Text(card, 8, 0, 60, "\xd0\x95\xd0\x9a\xd0\x91", kDim);
+    g_ui.city_text = Text(card, 8, 0, 140,
+                          "\xd0\x95\xd0\xba\xd0\xb0\xd1\x82\xd0\xb5\xd1\x80\xd0\xb8\xd0\xbd"
+                          "\xd0\xb1\xd1\x83\xd1\x80\xd0\xb3",
+                          kDim);
 
     BuildDigit(card, 10, 26, 26, 40, 6, g_ui.tens);
     BuildDigit(card, 40, 26, 26, 40, 6, g_ui.units);
@@ -696,14 +699,9 @@ void UpdateMedia() {
     std::string status = MusicTester::GetInstance().Status();
     bool playing = status.rfind("playing radio", 0) == 0;
 
-    std::string station = MusicTester::GetInstance().CurrentStation();
-    if (station != g_ui.last_station) {
-        g_ui.last_station = station;
-        lv_label_set_text(g_ui.station_text, station.empty() ? "-" : station.c_str());
-    }
-
     if (playing != g_ui.last_playing) {
         g_ui.last_playing = playing;
+        g_ui.last_station.clear();  // force the label below to be rewritten
         for (int i = 0; i < 3; ++i) {
             if (playing) {
                 Show(g_ui.bar[i]);
@@ -713,6 +711,16 @@ void UpdateMedia() {
                 lv_obj_set_y(g_ui.bar[i], 64);
             }
         }
+    }
+
+    // idle shows «Не играет» instead of naming a station that is not on the air
+    std::string station = playing ? MusicTester::GetInstance().CurrentStation() : std::string();
+    if (station != g_ui.last_station) {
+        g_ui.last_station = station;
+        lv_label_set_text(g_ui.station_text,
+                          playing ? station.c_str() : "\xd0\x9d\xd0\xb5 \xd0\xb8\xd0\xb3\xd1\x80\xd0\xb0\xd0\xb5\xd1\x82");
+        lv_obj_set_style_text_color(g_ui.station_text,
+                                    lv_color_hex(playing ? kWhite : kDim), 0);
     }
 
     if (playing) {
