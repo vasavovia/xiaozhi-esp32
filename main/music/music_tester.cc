@@ -20,6 +20,7 @@
 #include "board.h"
 #include "device_state.h"
 #include "mcp_server.h"
+#include "music/radio_stations.h"
 #include "music/yandex_music.h"
 #include "protocols/protocol.h"
 
@@ -57,6 +58,47 @@ bool AssistantBusy() {
     }
 }
 
+// Lower-cases ASCII and the Russian Cyrillic block, so «Европа» and «европа» compare equal.
+std::string LowerUtf8(const std::string& input) {
+    std::string out = input;
+    for (size_t i = 0; i + 1 < out.size(); ++i) {
+        unsigned char lead = static_cast<unsigned char>(out[i]);
+        unsigned char tail = static_cast<unsigned char>(out[i + 1]);
+        if (lead == 0xD0) {
+            if (tail >= 0x90 && tail <= 0x9F) {  // А..П -> а..п
+                out[i + 1] = static_cast<char>(tail + 0x20);
+            } else if (tail >= 0xA0 && tail <= 0xAF) {  // Р..Я -> р..я
+                out[i] = static_cast<char>(0xD1);
+                out[i + 1] = static_cast<char>(tail - 0x20);
+            } else if (tail == 0x81) {  // Ё -> ё
+                out[i] = static_cast<char>(0xD1);
+                out[i + 1] = static_cast<char>(0x91);
+            }
+        }
+    }
+    for (char& ch : out) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return out;
+}
+
+int FindStation(const std::string& name) {
+    if (name.empty()) {
+        return -1;
+    }
+    std::string wanted = LowerUtf8(name);
+    for (int i = 0; i < kRadioStationCount; ++i) {
+        std::string candidate = LowerUtf8(kRadioStations[i].name);
+        if (candidate.find(wanted) != std::string::npos ||
+            wanted.find(candidate) != std::string::npos) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
 MusicTester& MusicTester::GetInstance() {
@@ -80,6 +122,7 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
     playlist_.clear();
     playlist_mode_ = false;
     wave_mode_ = false;
+    radio_mode_ = false;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -87,6 +130,46 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
         return false;
     }
     return true;
+}
+
+bool MusicTester::StartRadio(const std::string& name, std::string& error) {
+    int index = FindStation(name);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (task_handle_ != nullptr) {
+        stop_requested_ = true;
+        error = "already playing, stop requested";
+        return false;
+    }
+    if (index >= 0) {
+        radio_index_ = index;
+    }
+    radio_mode_ = true;
+    playlist_mode_ = false;
+    wave_mode_ = false;
+    url_.clear();
+    playlist_.clear();
+    stop_requested_ = false;
+    skip_requested_ = false;
+    if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
+        task_handle_ = nullptr;
+        error = "task create failed";
+        return false;
+    }
+    ESP_LOGI(TAG, "Radio start: %s", kRadioStations[radio_index_].name);
+    return true;
+}
+
+void MusicTester::NextStation() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    skip_requested_ = true;
+}
+
+std::string MusicTester::CurrentStation() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (radio_index_ < 0 || radio_index_ >= kRadioStationCount) {
+        return std::string();
+    }
+    return std::string(kRadioStations[radio_index_].name);
 }
 
 bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error) {
@@ -100,6 +183,7 @@ bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error)
     url_.clear();
     playlist_mode_ = true;
     wave_mode_ = false;
+    radio_mode_ = false;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -120,6 +204,7 @@ bool MusicTester::StartWave(std::string& error) {
     url_.clear();
     playlist_mode_ = false;
     wave_mode_ = true;
+    radio_mode_ = false;
     stop_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
@@ -144,6 +229,12 @@ std::string MusicTester::Status() {
     if (task_handle_ == nullptr) {
         return "idle";
     }
+    if (radio_mode_) {
+        if (radio_index_ >= 0 && radio_index_ < kRadioStationCount) {
+            return "playing radio: " + std::string(kRadioStations[radio_index_].name);
+        }
+        return "playing radio";
+    }
     if (wave_mode_) {
         return "playing my wave";
     }
@@ -163,12 +254,14 @@ void MusicTester::WorkerTask() {
     std::string playlist;
     bool playlist_mode = false;
     bool wave_mode = false;
+    bool radio_mode = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         url = url_;
         playlist = playlist_;
         playlist_mode = playlist_mode_;
         wave_mode = wave_mode_;
+        radio_mode = radio_mode_;
     }
 
     // A voice request arrives while the assistant is still saying "playing": wait for it to
@@ -184,7 +277,9 @@ void MusicTester::WorkerTask() {
         return;
     }
 
-    if (wave_mode) {
+    if (radio_mode) {
+        PlayRadio();
+    } else if (wave_mode) {
         YandexMusic client;
         PlayWave(client);
     } else if (playlist_mode) {
@@ -218,6 +313,33 @@ void MusicTester::WorkerTask() {
         stop_requested_ = false;
     }
     ESP_LOGI(TAG, "Playback finished");
+}
+
+// Internet radio: each station plays until it fails or the listener asks for the next one,
+// then the player moves down the list and wraps around — the stream never ends by itself.
+void MusicTester::PlayRadio() {
+    while (!StopRequested() && !AssistantBusy()) {
+        std::string station_name;
+        std::string station_url;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (radio_index_ < 0 || radio_index_ >= kRadioStationCount) {
+                radio_index_ = 0;
+            }
+            station_name = kRadioStations[radio_index_].name;
+            station_url = kRadioStations[radio_index_].url;
+            skip_requested_ = false;
+        }
+        ESP_LOGI(TAG, "Radio: %s", station_name.c_str());
+        StreamOne(station_url);
+        if (StopRequested() || AssistantBusy()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            radio_index_ = (radio_index_ + 1) % kRadioStationCount;
+        }
+    }
 }
 
 // «Моя волна»: keeps asking the rotor for the next batch (passing the previous batchId so the
@@ -337,6 +459,13 @@ void MusicTester::StreamOne(const std::string& url) {
         if (AssistantBusy()) {
             ESP_LOGI(TAG, "Assistant is active, stopping music");
             break;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (skip_requested_) {
+                ESP_LOGI(TAG, "Next station requested");
+                break;
+            }
         }
 
         auto read = http->Read(reinterpret_cast<char*>(input.data()), input.size());
@@ -464,31 +593,6 @@ namespace {
 
 httpd_handle_t g_token_server = nullptr;
 
-esp_err_t TokenHandler(httpd_req_t* req) {
-    char query[512] = {};
-    char value[384] = {};
-    size_t query_len = httpd_req_get_url_query_len(req) + 1;
-    if (!YandexMusic::GetToken().empty()) {
-        httpd_resp_set_status(req, "403 Forbidden");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "token already stored");
-        return ESP_OK;
-    }
-    if (query_len > 1 && query_len <= sizeof(query) &&
-        httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-        httpd_query_key_value(query, "token", value, sizeof(value)) == ESP_OK && value[0] != 0) {
-        YandexMusic::SetToken(value);
-        ESP_LOGI(TAG, "Yandex token provisioned over LAN (%u chars)",
-                 static_cast<unsigned>(std::strlen(value)));
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, "ok: token stored");
-        return ESP_OK;
-    }
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_sendstr(req, "usage: /ym?token=YOUR_YANDEX_MUSIC_TOKEN");
-    return ESP_OK;
-}
-
 esp_err_t PlayHandler(httpd_req_t* req) {
     char query[768] = {};
     char value[512] = {};
@@ -497,15 +601,13 @@ esp_err_t PlayHandler(httpd_req_t* req) {
 
     if (httpd_req_get_url_query_len(req) + 1 <= sizeof(query) &&
         httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        if (httpd_query_key_value(query, "wave", value, sizeof(value)) == ESP_OK) {
-            started = MusicTester::GetInstance().StartWave(error);
-        } else if (httpd_query_key_value(query, "likes", value, sizeof(value)) == ESP_OK) {
-            started = MusicTester::GetInstance().StartPlaylist("", error);
-        } else if (httpd_query_key_value(query, "list", value, sizeof(value)) == ESP_OK) {
-            started = MusicTester::GetInstance().StartPlaylist(value, error);
+        if (httpd_query_key_value(query, "radio", value, sizeof(value)) == ESP_OK) {
+            started = MusicTester::GetInstance().StartRadio(value, error);
         } else if (httpd_query_key_value(query, "url", value, sizeof(value)) == ESP_OK) {
             started = MusicTester::GetInstance().StartUrl(value, error);
         }
+    } else {
+        started = MusicTester::GetInstance().StartRadio("", error);
     }
 
     httpd_resp_set_type(req, "text/plain");
@@ -514,8 +616,15 @@ esp_err_t PlayHandler(httpd_req_t* req) {
     } else if (!error.empty()) {
         httpd_resp_sendstr(req, ("error: " + error).c_str());
     } else {
-        httpd_resp_sendstr(req, "usage: /play?list=NAME | /play?likes=1 | /play?wave=1 | /play?url=URL");
+        httpd_resp_sendstr(req, "usage: /play?radio=NAME | /play?url=URL | /radio?next=1 | /status | /vol?value=NN");
     }
+    return ESP_OK;
+}
+
+esp_err_t RadioHandler(httpd_req_t* req) {
+    MusicTester::GetInstance().NextStation();
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "ok: next station");
     return ESP_OK;
 }
 
@@ -564,17 +673,17 @@ void StartTokenHttpd() {
         g_token_server = nullptr;
         return;
     }
-    httpd_uri_t uri = {};
-    uri.uri = "/ym";
-    uri.method = HTTP_GET;
-    uri.handler = TokenHandler;
-    httpd_register_uri_handler(g_token_server, &uri);
-
     httpd_uri_t play = {};
     play.uri = "/play";
     play.method = HTTP_GET;
     play.handler = PlayHandler;
     httpd_register_uri_handler(g_token_server, &play);
+
+    httpd_uri_t radio = {};
+    radio.uri = "/radio";
+    radio.method = HTTP_GET;
+    radio.handler = RadioHandler;
+    httpd_register_uri_handler(g_token_server, &radio);
 
     httpd_uri_t status = {};
     status.uri = "/status";
@@ -588,7 +697,7 @@ void StartTokenHttpd() {
     volume.handler = VolumeHandler;
     httpd_register_uri_handler(g_token_server, &volume);
 
-    ESP_LOGI(TAG, "Music HTTP control on port 8080: /play?list=NAME, /play?likes=1, /play?url=URL, /status, /vol?value=NN");
+    ESP_LOGI(TAG, "Music HTTP control on port 8080: /play?radio=NAME, /radio?next=1, /play?url=URL, /status, /vol?value=NN");
 }
 
 // lwIP must be up before httpd_start(), so wait for the station to get an address.
@@ -611,9 +720,6 @@ void TokenServerTask(void*) {
 }  // namespace
 
 void StartTokenProvisioning() {
-    if (YandexMusic::GetToken().empty()) {
-        ESP_LOGI(TAG, "No Yandex token yet, /ym will accept one");
-    }
     if (xTaskCreate(TokenServerTask, "ym_token", 4096, nullptr, 2, nullptr) != pdPASS) {
         ESP_LOGW(TAG, "Music HTTP task could not be created");
     }
@@ -627,32 +733,26 @@ void InitializeMusicTester() {
     auto& server = McpServer::GetInstance();
 
     server.AddTool(
-        "self.music.play_wave",
-        "Play the user's personal Yandex Music radio station («Моя волна»): endless, "
-        "personalised, adapts from likes and skips. Use it when the user asks for the wave, "
-        "the radio, or 'включи мою волну'. Stops any previous playback.",
-        PropertyList(), [](const PropertyList&) -> ToolResult {
+        "self.music.play_radio",
+        "Play internet radio on the device speaker. Pass the station name the user asked for "
+        "(«Европа Плюс», «Ретро FM», «Дорожное», «Наше радио», «SomaFM Groove Salad», "
+        "«SomaFM Deep Space», «SomaFM Indie Pop»), or an empty string to start with the first one. "
+        "Stops any previous playback.",
+        PropertyList({Property("station", kPropertyTypeString, std::string(""))}),
+        [](const PropertyList& properties) -> ToolResult {
+            std::string station = properties["station"].value<std::string>();
             std::string error;
-            if (!MusicTester::GetInstance().StartWave(error)) {
+            if (!MusicTester::GetInstance().StartRadio(station, error)) {
                 return std::unexpected(error);
             }
-            return std::string("playing");
+            return std::string("playing radio");
         });
 
-    server.AddTool(
-        "self.music.play_playlist",
-        "Play a Yandex Music playlist on the device speaker. "
-        "Pass the playlist name the user asked for, or an empty string for liked songs. "
-        "Stops any previous playback.",
-        PropertyList({Property("playlist", kPropertyTypeString, std::string(""))}),
-        [](const PropertyList& properties) -> ToolResult {
-            std::string playlist = properties["playlist"].value<std::string>();
-            std::string error;
-            if (!MusicTester::GetInstance().StartPlaylist(playlist, error)) {
-                return std::unexpected(error);
-            }
-            return std::string("playing");
-        });
+    server.AddTool("self.music.next_station", "Switch internet radio to the next station.",
+                   PropertyList(), [](const PropertyList&) -> ToolResult {
+                       MusicTester::GetInstance().NextStation();
+                       return std::string("switching");
+                   });
 
     server.AddTool(
         "self.music.play_url",
@@ -677,19 +777,6 @@ void InitializeMusicTester() {
                    PropertyList(), [](const PropertyList&) -> ToolResult {
                        return MusicTester::GetInstance().Status();
                    });
-
-    server.AddUserOnlyTool(
-        "self.music.set_token",
-        "Store the Yandex Music OAuth token on the device (user only, never call from the model).",
-        PropertyList({Property("token", kPropertyTypeString)}),
-        [](const PropertyList& properties) -> ToolResult {
-            std::string token = properties["token"].value<std::string>();
-            if (token.empty()) {
-                return std::unexpected("empty token");
-            }
-            YandexMusic::SetToken(token);
-            return std::string("token stored");
-        });
 
     ESP_LOGI(TAG, "Music tools registered");
 }
