@@ -38,6 +38,7 @@ private:
     TaskHandle_t task_handle_ = nullptr;
     bool stop_requested_ = false;
     bool skip_requested_ = false;
+    bool switch_requested_ = false;
     bool playlist_mode_ = false;
     bool wave_mode_ = false;
     bool radio_mode_ = false;

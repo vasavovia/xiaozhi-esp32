@@ -177,6 +177,7 @@ bool MusicTester::StartRadio(const std::string& name, std::string& error) {
                 radio_index_ = index;
             }
             skip_requested_ = true;
+            switch_requested_ = true;
             ESP_LOGI(TAG, "Radio switch: %s", kRadioStations[radio_index_].name);
             return true;
         }
@@ -194,6 +195,7 @@ bool MusicTester::StartRadio(const std::string& name, std::string& error) {
     playlist_.clear();
     stop_requested_ = false;
     skip_requested_ = false;
+    switch_requested_ = false;
     if (xTaskCreate(WorkerEntry, "music_player", 24576, this, 3, &task_handle_) != pdPASS) {
         task_handle_ = nullptr;
         error = "task create failed";
@@ -381,7 +383,13 @@ void MusicTester::PlayRadio() {
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            radio_index_ = (radio_index_ + 1) % kRadioStationCount;
+            // A named request already moved radio_index_ to the wanted station, so the loop must
+            // not step past it; only «next» and a dead stream advance the list.
+            if (switch_requested_) {
+                switch_requested_ = false;
+            } else {
+                radio_index_ = (radio_index_ + 1) % kRadioStationCount;
+            }
         }
     }
 }

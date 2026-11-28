@@ -15,10 +15,12 @@
 
 namespace {
 
-// Yekaterinburg: current temperature, WMO weather code and wind speed.
+// Yekaterinburg: current temperature, WMO weather code and wind speed. open-meteo answers in
+// km/h unless asked otherwise, and the card is labelled in m/s.
 constexpr const char* kUrl =
     "https://api.open-meteo.com/v1/forecast?latitude=56.8389&longitude=60.6057"
-    "&current=temperature_2m,weather_code,wind_speed_10m&timezone=Asia%2FYekaterinburg";
+    "&current=temperature_2m,weather_code,wind_speed_10m"
+    "&wind_speed_unit=ms&timezone=Asia%2FYekaterinburg";
 
 constexpr TickType_t kHour = pdMS_TO_TICKS(3600 * 1000);
 constexpr TickType_t kRetry = pdMS_TO_TICKS(5 * 60 * 1000);
