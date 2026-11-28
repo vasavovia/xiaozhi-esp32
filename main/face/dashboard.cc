@@ -487,6 +487,7 @@ void ApplyTemperature(int temp) {
     bool has_tens = value >= 10;
 
     // one digit is centred in the two-digit field instead of leaving the tens slot empty
+    Show(g_ui.units.box);
     if (has_tens) {
         lv_obj_set_x(g_ui.tens.box, 10);
         Show(g_ui.tens.box);
@@ -658,8 +659,12 @@ void UpdateClock() {
     if (now == g_ui.last_clock) {
         return;
     }
+    bool first = g_ui.last_clock == "--:--" && now != "--:--";
     g_ui.last_clock = now;
     lv_label_set_text(g_ui.clock_text, now.c_str());
+    if (first) {
+        ESP_LOGI(TAG, "clock synced: %s", now.c_str());
+    }
 }
 
 void UpdateWeather() {
@@ -672,6 +677,7 @@ void UpdateWeather() {
     if (temp != g_ui.last_temp) {
         g_ui.last_temp = temp;
         ApplyTemperature(temp);
+        ESP_LOGI(TAG, "weather card: %d C, wmo %d", temp, code);
     }
     if (code != g_ui.last_code) {
         g_ui.last_code = code;
