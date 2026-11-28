@@ -43,6 +43,8 @@ set(SOURCES "audio/audio_codec.cc"
             "music/music_tester.cc"
             "music/yandex_music.cc"
             "face/face_widget.cc"
+            "face/weather.cc"
+            "face/hud_weather.cc"
             "main.cc"
             )
 
