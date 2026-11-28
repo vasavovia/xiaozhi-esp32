@@ -23,7 +23,7 @@ jobs:
           python scripts/build.py freenove-esp32s3-display-2.8-lcd \
             --name freenove-esp32s3-display-2.8-lcd \
             --language ru-RU \
-            --wake-word wn9_computer_tts 2>&1 | tee build.log
+            --wake-word wn10_ru_privetesp 2>&1 | tee build.log
 
       - name: Upload merged binary
         if: success()
