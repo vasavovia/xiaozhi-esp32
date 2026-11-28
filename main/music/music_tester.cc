@@ -1,6 +1,7 @@
 #include "music_tester.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -99,6 +100,33 @@ int FindStation(const std::string& name) {
     return -1;
 }
 
+// httpd_query_key_value returns the value still percent-encoded, so «Ретро» arrives as
+// %D0%A0%D0%B5... and never matches the station table without this.
+std::string UrlDecode(const char* value) {
+    std::string out;
+    for (size_t i = 0; value[i] != '\0'; ++i) {
+        char ch = value[i];
+        if (ch == '%' && std::isxdigit(static_cast<unsigned char>(value[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(value[i + 2]))) {
+            int byte = 0;
+            for (int k = 1; k <= 2; ++k) {
+                char digit = value[i + k];
+                int nibble = (digit >= '0' && digit <= '9') ? digit - '0'
+                             : (digit >= 'a' && digit <= 'f') ? digit - 'a' + 10
+                                                             : digit - 'A' + 10;
+                byte = byte * 16 + nibble;
+            }
+            out.push_back(static_cast<char>(byte));
+            i += 2;
+        } else if (ch == '+') {
+            out.push_back(' ');
+        } else {
+            out.push_back(ch);
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 MusicTester& MusicTester::GetInstance() {
@@ -134,8 +162,24 @@ bool MusicTester::StartUrl(const std::string& url, std::string& error) {
 
 bool MusicTester::StartRadio(const std::string& name, std::string& error) {
     int index = FindStation(name);
+    // An unrecognised name must not silently start whatever station happens to be current:
+    // the caller (voice tool or /play?radio=) needs to hear that the station is unknown.
+    if (index < 0 && !name.empty()) {
+        error = "unknown station: " + name;
+        return false;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (task_handle_ != nullptr) {
+        if (radio_mode_) {
+            // «включи Ретро» while the radio is already on is a switch, not an error: the worker
+            // drops the current stream and re-reads the index, so the new station starts at once.
+            if (index >= 0) {
+                radio_index_ = index;
+            }
+            skip_requested_ = true;
+            ESP_LOGI(TAG, "Radio switch: %s", kRadioStations[radio_index_].name);
+            return true;
+        }
         stop_requested_ = true;
         error = "already playing, stop requested";
         return false;
@@ -170,6 +214,14 @@ std::string MusicTester::CurrentStation() {
         return std::string();
     }
     return std::string(kRadioStations[radio_index_].name);
+}
+
+std::string MusicTester::CurrentStationPanel() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (radio_index_ < 0 || radio_index_ >= kRadioStationCount) {
+        return std::string();
+    }
+    return std::string(kRadioStations[radio_index_].panel);
 }
 
 bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error) {
@@ -598,21 +650,31 @@ esp_err_t PlayHandler(httpd_req_t* req) {
     char value[512] = {};
     std::string error;
     bool started = false;
+    bool radio_started = false;
 
     if (httpd_req_get_url_query_len(req) + 1 <= sizeof(query) &&
         httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
         if (httpd_query_key_value(query, "radio", value, sizeof(value)) == ESP_OK) {
-            started = MusicTester::GetInstance().StartRadio(value, error);
+            std::string station = UrlDecode(value);
+            ESP_LOGI(TAG, "Play request for station \"%s\"", station.c_str());
+            started = MusicTester::GetInstance().StartRadio(station, error);
+            radio_started = started;
         } else if (httpd_query_key_value(query, "url", value, sizeof(value)) == ESP_OK) {
             started = MusicTester::GetInstance().StartUrl(value, error);
         }
     } else {
         started = MusicTester::GetInstance().StartRadio("", error);
+        radio_started = started;
     }
 
     httpd_resp_set_type(req, "text/plain");
     if (started) {
-        httpd_resp_sendstr(req, "ok: playing");
+        if (radio_started) {
+            std::string name = MusicTester::GetInstance().CurrentStation();
+            httpd_resp_sendstr(req, ("ok: playing " + name).c_str());
+        } else {
+            httpd_resp_sendstr(req, "ok: playing");
+        }
     } else if (!error.empty()) {
         httpd_resp_sendstr(req, ("error: " + error).c_str());
     } else {
@@ -736,8 +798,8 @@ void InitializeMusicTester() {
         "self.music.play_radio",
         "Play internet radio on the device speaker. Pass the station name the user asked for "
         "(«Европа Плюс», «Ретро FM», «Дорожное», «Наше радио», «SomaFM Groove Salad», "
-        "«SomaFM Deep Space», «SomaFM Indie Pop»), or an empty string to start with the first one. "
-        "Stops any previous playback.",
+        "«SomaFM Deep Space One»), or an empty string to start with the first one. "
+        "Stops any previous playback. An unknown name is rejected with an error.",
         PropertyList({Property("station", kPropertyTypeString, std::string(""))}),
         [](const PropertyList& properties) -> ToolResult {
             std::string station = properties["station"].value<std::string>();
@@ -745,7 +807,7 @@ void InitializeMusicTester() {
             if (!MusicTester::GetInstance().StartRadio(station, error)) {
                 return std::unexpected(error);
             }
-            return std::string("playing radio");
+            return "playing " + MusicTester::GetInstance().CurrentStation();
         });
 
     server.AddTool("self.music.next_station", "Switch internet radio to the next station.",
