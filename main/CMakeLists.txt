@@ -42,10 +42,9 @@ set(SOURCES "audio/audio_codec.cc"
             "assets.cc"
             "music/music_tester.cc"
             "music/yandex_music.cc"
-            "face/face_widget.cc"
+            "face/dashboard.cc"
             "face/face_portrait.c"
             "face/weather.cc"
-            "face/hud_weather.cc"
             "main.cc"
             )
 

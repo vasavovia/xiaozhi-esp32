@@ -15,16 +15,17 @@
 
 namespace {
 
-// Yekaterinburg, current temperature and WMO weather code.
+// Yekaterinburg: current temperature, WMO weather code and wind speed.
 constexpr const char* kUrl =
     "https://api.open-meteo.com/v1/forecast?latitude=56.8389&longitude=60.6057"
-    "&current=temperature_2m,weather_code&timezone=Asia%2FYekaterinburg";
+    "&current=temperature_2m,weather_code,wind_speed_10m&timezone=Asia%2FYekaterinburg";
 
 constexpr TickType_t kHour = pdMS_TO_TICKS(3600 * 1000);
 constexpr TickType_t kRetry = pdMS_TO_TICKS(5 * 60 * 1000);
 
 volatile int g_temp = 0;
 volatile int g_code = -1;
+volatile int g_wind10 = 0;
 volatile bool g_ready = false;
 
 bool Fetch() {
@@ -71,12 +72,16 @@ bool Fetch() {
     const cJSON* current = cJSON_GetObjectItem(root, "current");
     const cJSON* temp = cJSON_GetObjectItem(current, "temperature_2m");
     const cJSON* code = cJSON_GetObjectItem(current, "weather_code");
+    const cJSON* wind = cJSON_GetObjectItem(current, "wind_speed_10m");
     bool ok = cJSON_IsNumber(temp) && cJSON_IsNumber(code);
     if (ok) {
         g_temp = static_cast<int>(std::lround(temp->valuedouble));
         g_code = code->valueint;
+        g_wind10 = cJSON_IsNumber(wind) ? static_cast<int>(std::lround(wind->valuedouble * 10.0))
+                                        : 0;
         g_ready = true;
-        ESP_LOGI(TAG, "Yekaterinburg %d C, wmo %d", g_temp, g_code);
+        ESP_LOGI(TAG, "Yekaterinburg %d C, wmo %d, wind %d.%d m/s", g_temp, g_code, g_wind10 / 10,
+                 g_wind10 % 10);
     }
     cJSON_Delete(root);
     return ok;
@@ -107,12 +112,13 @@ void WeatherTask(void*) {
 
 }  // namespace
 
-bool GetWeather(int& temp_c, int& wmo_code) {
+bool GetWeather(int& temp_c, int& wmo_code, float& wind_mps) {
     if (!g_ready) {
         return false;
     }
     temp_c = g_temp;
     wmo_code = g_code;
+    wind_mps = static_cast<float>(g_wind10) / 10.0f;
     return true;
 }
 

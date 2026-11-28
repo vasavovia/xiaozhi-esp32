@@ -19,8 +19,6 @@ public:
     bool StartRadio(const std::string& name, std::string& error);
     void NextStation();
     std::string CurrentStation();
-    // Same station, pre-broken for the 80 px HUD column.
-    std::string CurrentStationPanel();
     bool StartPlaylist(const std::string& playlist, std::string& error);
     bool StartWave(std::string& error);
     void Stop();

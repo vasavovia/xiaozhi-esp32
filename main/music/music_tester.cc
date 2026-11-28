@@ -216,14 +216,6 @@ std::string MusicTester::CurrentStation() {
     return std::string(kRadioStations[radio_index_].name);
 }
 
-std::string MusicTester::CurrentStationPanel() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (radio_index_ < 0 || radio_index_ >= kRadioStationCount) {
-        return std::string();
-    }
-    return std::string(kRadioStations[radio_index_].panel);
-}
-
 bool MusicTester::StartPlaylist(const std::string& playlist, std::string& error) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (task_handle_ != nullptr) {
