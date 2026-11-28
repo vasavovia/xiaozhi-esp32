@@ -40,6 +40,16 @@ jobs:
           name: build-log
           path: build.log
 
+      # merged-binary.bin stops before the end of the 8 MB assets partition, so the wake-word
+      # models (srmodels.bin sits last in the pack) never reach the device through it.
+      - name: Upload assets image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets-bin
+          path: build/generated_assets.bin
+          if-no-files-found: warn
+
   publish:
     needs: build
     if: always()
@@ -69,4 +79,7 @@ jobs:
           fi
           if [ -f out/merged-binary-ru/merged-binary.bin ]; then
             gh release upload "$TAG" --repo "$REPO" --clobber out/merged-binary-ru/merged-binary.bin
+          fi
+          if [ -f out/assets-bin/generated_assets.bin ]; then
+            gh release upload "$TAG" --repo "$REPO" --clobber out/assets-bin/generated_assets.bin
           fi
