@@ -23,6 +23,7 @@
 #include "system_reset.h"
 #include "esp_lcd_ili9341.h"
 #include "music/music_tester.h"
+#include "face/face_widget.h"
 
 #define TAG "FreenoveESP32S3Display"
 
@@ -199,6 +200,7 @@ private:
 
     void InitializeTools() {
         InitializeMusicTester();
+        InitializeFace();
     }
 
 public:
