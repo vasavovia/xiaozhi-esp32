@@ -9,6 +9,11 @@
 
 #define TAG "Face"
 
+// The LVGL screen is 320x240: the panel is 240x320 and the board swaps the axes, so the
+// portrait takes the left 240x240 and the right 80 px column belongs to the info panel.
+constexpr int kScreenW = 320;
+constexpr int kScreenH = 240;
+
 namespace {
 
 lv_obj_t* g_frame = nullptr;
@@ -21,18 +26,18 @@ void Build() {
     lv_obj_remove_style_all(root);
     lv_obj_clear_flag(root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(root, 0, 0);
-    lv_obj_set_size(root, 240, 320);
+    lv_obj_set_size(root, kScreenW, kScreenH);
 
     lv_obj_t* picture = lv_image_create(root);
     lv_image_set_src(picture, &face_portrait);
     lv_obj_set_pos(picture, 0, 0);
 
-    // thin state frame drawn over the portrait: blue while listening, warm while speaking
+    // thin state frame around the portrait: blue while listening, warm while speaking
     g_frame = lv_obj_create(top);
     lv_obj_remove_style_all(g_frame);
     lv_obj_clear_flag(g_frame, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(g_frame, 0, 0);
-    lv_obj_set_size(g_frame, 240, 320);
+    lv_obj_set_size(g_frame, 240, kScreenH);
     lv_obj_set_style_bg_opa(g_frame, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(g_frame, 3, 0);
     lv_obj_set_style_border_color(g_frame, lv_color_hex(0x000000), 0);

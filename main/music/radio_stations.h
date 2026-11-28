@@ -18,7 +18,6 @@ static const RadioStation kRadioStations[] = {
      "https://nashe1.hostingradio.ru:80/nashe-128.mp3"},
     {"SomaFM Groove Salad", "https://ice1.somafm.com/groovesalad-128-mp3"},
     {"SomaFM Deep Space One", "https://ice1.somafm.com/deepspaceone-128-mp3"},
-    {"SomaFM Indie Pop", "https://ice1.somafm.com/indiepop-128-mp3"},
 };
 
 static constexpr int kRadioStationCount =
